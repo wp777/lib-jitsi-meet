@@ -66,7 +66,8 @@
     "test": "karma start karma.conf.js",
     "test-watch": "karma start karma.conf.js --no-single-run",
     "validate": "npm ls",
-    "watch": "webpack --config webpack.config.js --watch --mode development"
+    "watch": "webpack --config webpack.config.js --watch --mode development",
+    "build": "webpack && webpack -p"
   },
   "main": "./index.js",
   "license": "Apache-2.0"
