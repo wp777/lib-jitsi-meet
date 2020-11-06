@@ -155,10 +155,10 @@ export class E2EEncryption {
         this._key = enabled ? this._generateKey() : false;
 
         // Send it to others using the E2EE olm channel.
-        this._olmAdapter.updateKey(this._key).then(index => {
-            // Set our key so we begin encrypting.
-            this._e2eeCtx.setKey(this.conference.myUserId(), this._key, index);
-        });
+        const index = await this._olmAdapter.updateKey(this._key);
+        
+        // Set our key so we begin encrypting.
+        this._e2eeCtx.setKey(this.conference.myUserId(), this._key, index);
     }
 
     /**

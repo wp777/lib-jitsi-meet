@@ -3451,14 +3451,14 @@ JitsiConference.prototype.isE2EESupported = function() {
  * @param {boolean} enabled whether to enable E2EE or not.
  * @returns {void}
  */
-JitsiConference.prototype.toggleE2EE = function(enabled) {
+JitsiConference.prototype.toggleE2EE = async function(enabled) {
     if (!this.isE2EESupported()) {
         logger.warn('Cannot enable / disable E2EE: platform is not supported.');
 
         return;
     }
 
-    this._e2eEncryption.setEnabled(enabled);
+    await this._e2eEncryption.setEnabled(enabled);
 };
 
 /**
