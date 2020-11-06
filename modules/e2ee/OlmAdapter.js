@@ -111,48 +111,50 @@ export class OlmAdapter extends Listenable {
 
         // Broadcast it.
         const promises = [];
-
         for (const participant of this._conf.getParticipants()) {
-            const pId = participant.getId();
-            const olmData = this._getParticipantOlmData(participant);
-
-            // TODO: skip those who don't support E2EE.
-
-            if (!olmData.session) {
-                logger.warn(`Tried to send key to participant ${pId} but we have no session`);
-
-                // eslint-disable-next-line no-continue
-                continue;
-            }
-
-            const uuid = uuidv4();
-            const data = {
-                [JITSI_MEET_MUC_TYPE]: OLM_MESSAGE_TYPE,
-                olm: {
-                    type: OLM_MESSAGE_TYPES.KEY_INFO,
-                    data: {
-                        ciphertext: this._encryptKeyInfo(olmData.session),
-                        uuid
-                    }
-                }
-            };
-            const d = new Deferred();
-
-            d.setRejectTimeout(REQ_TIMEOUT);
-            d.catch(() => {
-                this._reqs.delete(uuid);
-            });
-            this._reqs.set(uuid, d);
-            promises.push(d);
-
-            this._sendMessage(data, pId);
+            promises.push(this.updateParticipantKey(participant, key));
         }
-
         await Promise.allSettled(promises);
 
-        // TODO: retry failed ones?
-
         return this._keyIndex;
+    }
+    
+    async updateParticipantKey(participant, key) {
+        const pId = participant.getId();
+        const olmData = this._getParticipantOlmData(participant);
+        
+        // Try to wait for a session with the participant
+        let i = 10;
+        while (--i > 0 && !olmData.session) {
+            await new Promise(r => setTimeout(r, 250));
+        }
+        
+        if (!olmData.session) {
+            logger.warn(`Tried to send key to participant ${pId} but we have no session`);
+            return;
+        }
+        
+        const uuid = uuidv4();
+        const data = {
+            [JITSI_MEET_MUC_TYPE]: OLM_MESSAGE_TYPE,
+            olm: {
+                type: OLM_MESSAGE_TYPES.KEY_INFO,
+                data: {
+                    ciphertext: this._encryptKeyInfo(olmData.session),
+                    uuid
+                }
+            }
+        };
+        
+        const d = new Deferred();
+        d.setRejectTimeout(REQ_TIMEOUT);
+        d.catch(() => {
+            this._reqs.delete(uuid);
+        });
+        this._reqs.set(uuid, d);
+        this._sendMessage(data, pId);
+        
+        await d.promise;
     }
 
     /**
