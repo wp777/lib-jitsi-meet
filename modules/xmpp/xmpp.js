@@ -30,12 +30,20 @@ const logger = getLogger(__filename);
  * @param {string} [options.token] - JWT token used for authentication(JWT authentication module must be enabled in
  * Prosody).
  * @param {string} options.serviceUrl - The service URL for XMPP connection.
+ * @param {string} options.shard - The shard where XMPP connection initially landed.
  * @param {string} options.enableWebsocketResume - True to enable stream resumption.
  * @param {number} [options.websocketKeepAlive] - See {@link XmppConnection} constructor.
  * @param {Object} [options.xmppPing] - See {@link XmppConnection} constructor.
  * @returns {XmppConnection}
  */
-function createConnection({ enableWebsocketResume, serviceUrl = '/http-bind', token, websocketKeepAlive, xmppPing }) {
+function createConnection({
+    enableWebsocketResume,
+    serviceUrl = '/http-bind',
+    shard,
+    token,
+    websocketKeepAlive,
+    xmppPing }) {
+
     // Append token as URL param
     if (token) {
         // eslint-disable-next-line no-param-reassign
@@ -46,7 +54,8 @@ function createConnection({ enableWebsocketResume, serviceUrl = '/http-bind', to
         enableWebsocketResume,
         serviceUrl,
         websocketKeepAlive,
-        xmppPing
+        xmppPing,
+        shard
     });
 }
 
@@ -78,6 +87,19 @@ export const DEFAULT_STUN_SERVERS = [
 export const JITSI_MEET_MUC_TYPE = 'type';
 
 /**
+ * The feature used by jigasi participants.
+ * @type {string}
+ */
+export const FEATURE_JIGASI = 'http://jitsi.org/protocol/jigasi';
+
+/**
+ * The feature used by the lib to mark support for e2ee. We use the feature by putting it in the presence
+ * to avoid additional signaling (disco-info).
+ * @type {string}
+ */
+export const FEATURE_E2EE = 'https://jitsi.org/meet/e2ee';
+
+/**
  *
  */
 export default class XMPP extends Listenable {
@@ -106,6 +128,11 @@ export default class XMPP extends Listenable {
 
         initStropheNativePlugins();
 
+        const xmppPing = options.xmppPing || {};
+
+        // let's ping the main domain (in case a guest one is used for the connection)
+        xmppPing.domain = options.hosts.domain;
+
         this.connection = createConnection({
             enableWebsocketResume: options.enableWebsocketResume,
 
@@ -113,7 +140,26 @@ export default class XMPP extends Listenable {
             serviceUrl: options.serviceUrl || options.bosh,
             token,
             websocketKeepAlive: options.websocketKeepAlive,
-            xmppPing: options.xmppPing
+            xmppPing,
+            shard: options.deploymentInfo?.shard
+        });
+
+        // forwards the shard changed event
+        this.connection.on(XmppConnection.Events.CONN_SHARD_CHANGED, () => {
+            /* eslint-disable camelcase */
+            const details = {
+                shard_changed: true,
+                suspend_time: this.connection.ping.getPingSuspendTime(),
+                time_since_last_success: this.connection.getTimeSinceLastSuccess()
+            };
+            /* eslint-enable camelcase */
+
+            this.eventEmitter.emit(
+                JitsiConnectionEvents.CONNECTION_FAILED,
+                JitsiConnectionErrors.OTHER_ERROR,
+                undefined,
+                undefined,
+                details);
         });
 
         this._initStrophePlugins();
@@ -150,12 +196,20 @@ export default class XMPP extends Listenable {
         this.caps.addFeature('urn:xmpp:jingle:apps:rtp:audio');
         this.caps.addFeature('urn:xmpp:jingle:apps:rtp:video');
 
-        // Disable RTX on Firefox because of https://bugzilla.mozilla.org/show_bug.cgi?id=1668028.
-        if (!(this.options.disableRtx || browser.isFirefox())) {
+        // Disable RTX on Firefox 83 and older versions because of
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=1668028
+        if (!(this.options.disableRtx || (browser.isFirefox() && browser.isVersionLessThan(84)))) {
             this.caps.addFeature('urn:ietf:rfc:4588');
         }
         if (this.options.enableOpusRed === true && browser.supportsAudioRed()) {
             this.caps.addFeature('http://jitsi.org/opus-red');
+        }
+
+        if (typeof this.options.enableRemb === 'undefined' || this.options.enableRemb) {
+            this.caps.addFeature('http://jitsi.org/remb');
+        }
+        if (typeof this.options.enableTcc === 'undefined' || this.options.enableTcc) {
+            this.caps.addFeature('http://jitsi.org/tcc');
         }
 
         // this is dealt with by SDP O/A so we don't need to announce this
@@ -180,7 +234,7 @@ export default class XMPP extends Listenable {
         }
 
         if (E2EEncryption.isSupported(this.options)) {
-            this.caps.addFeature('https://jitsi.org/meet/e2ee');
+            this.caps.addFeature(FEATURE_E2EE, false, true);
         }
     }
 
@@ -220,15 +274,12 @@ export default class XMPP extends Listenable {
             // XmppConnection emits CONNECTED again on reconnect - a good opportunity to clear any "last error" flags
             this._resetState();
 
-            // Schedule ping ?
-            const pingJid = this.connection.domain;
-
             // FIXME no need to do it again on stream resume
-            this.caps.getFeaturesAndIdentities(pingJid)
+            this.caps.getFeaturesAndIdentities(this.options.hosts.domain)
                 .then(({ features, identities }) => {
                     if (!features.has(Strophe.NS.PING)) {
-                        logger.error(
-                            `Ping NOT supported by ${pingJid} - please enable ping in your XMPP server config`);
+                        logger.error(`Ping NOT supported by ${
+                            this.options.hosts.domain} - please enable ping in your XMPP server config`);
                     }
 
                     // check for speakerstats
@@ -531,8 +582,7 @@ export default class XMPP extends Listenable {
      */
     ping(timeout) {
         return new Promise((resolve, reject) => {
-            this.connection.ping
-                    .ping(this.connection.domain, resolve, reject, timeout);
+            this.connection.ping.ping(this.connection.pingDomain, resolve, reject, timeout);
         });
     }
 

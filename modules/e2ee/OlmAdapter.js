@@ -121,12 +121,13 @@ export class OlmAdapter extends Listenable {
     
     async updateParticipantKey(participant, key) {
         const pId = participant.getId();
-        const olmData = this._getParticipantOlmData(participant);
+        let olmData = this._getParticipantOlmData(participant);
         
         // Try to wait for a session with the participant
         let i = 10;
         while (--i > 0 && !olmData.session) {
             await new Promise(r => setTimeout(r, 250));
+            olmData = this._getParticipantOlmData(participant);
         }
         
         if (!olmData.session) {

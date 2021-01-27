@@ -287,46 +287,6 @@ export default function TraceablePeerConnection(
      */
     this.senderVideoMaxHeight = null;
 
-    // We currently support preferring/disabling video codecs only.
-    const getCodecMimeType = codec => {
-        if (typeof codec === 'string') {
-            return Object.values(CodecMimeType).find(value => value === codec.toLowerCase());
-        }
-
-        return null;
-    };
-
-    // Set the codec preference that will be applied on the SDP based on the config.js settings.
-    let preferredCodec = getCodecMimeType(
-        this.options.preferredCodec || (this.options.preferH264 && CodecMimeType.H264)
-    );
-
-    // Do not prefer VP9 on Firefox because of the following bug.
-    // https://bugzilla.mozilla.org/show_bug.cgi?id=1633876
-    if (browser.isFirefox() && preferredCodec === CodecMimeType.VP9) {
-        preferredCodec = null;
-    }
-
-    // Determine the codec that needs to be disabled based on config.js settings.
-    let disabledCodec = getCodecMimeType(
-        this.options.disabledCodec || (this.options.disableH264 && CodecMimeType.H264)
-    );
-
-    // Make sure we don't disable VP8 since it is a mandatory codec.
-    if (disabledCodec === CodecMimeType.VP8) {
-        logger.warn('Disabling VP8 is not permitted, setting is ignored!');
-        disabledCodec = null;
-    }
-
-    if (preferredCodec || disabledCodec) {
-        // If both enable and disable are set for the same codec, disable setting will prevail.
-        this.codecPreference = {
-            enable: disabledCodec === null,
-            mediaType: MediaType.VIDEO,
-            mimeType: disabledCodec ? disabledCodec : preferredCodec
-        };
-    }
-
     // override as desired
     this.trace = (what, info) => {
         logger.debug(what, info);
@@ -804,7 +764,7 @@ TraceablePeerConnection.prototype._remoteTrackAdded = function(stream, track, tr
             mediaLines = remoteSDP.media.filter(mls => SDPUtil.findLine(mls, `a=mid:${mid}`));
         } else {
             mediaLines = remoteSDP.media.filter(mls => {
-                const msid = SDPUtil.findLine(mls, 'a=msid');
+                const msid = SDPUtil.findLine(mls, 'a=msid:');
 
                 return typeof msid !== 'undefined' && streamId === msid.substring(7).split(' ')[0];
             });
@@ -1745,6 +1705,64 @@ TraceablePeerConnection.prototype._assertTrackBelongs = function(
 };
 
 /**
+ * Returns the codec that is configured on the client as the preferred video codec.
+ * This takes into account the current order of codecs in the local description sdp.
+ *
+ * @returns {CodecMimeType} The codec that is set as the preferred codec to receive
+ * video in the local SDP.
+ */
+TraceablePeerConnection.prototype.getConfiguredVideoCodec = function() {
+    const sdp = this.localDescription.sdp;
+    const defaultCodec = CodecMimeType.VP8;
+
+    if (!sdp) {
+        return defaultCodec;
+    }
+    const parsedSdp = transform.parse(sdp);
+    const mLine = parsedSdp.media.find(m => m.type === MediaType.VIDEO);
+    const codec = mLine.rtp[0].codec;
+
+    if (codec) {
+        return Object.values(CodecMimeType).find(value => value === codec.toLowerCase());
+    }
+
+    return defaultCodec;
+};
+
+/**
+ * Sets the codec preference on the peerconnection. The codec preference goes into effect when
+ * the next renegotiation happens.
+ *
+ * @param {CodecMimeType} preferredCodec the preferred codec.
+ * @param {CodecMimeType} disabledCodec the codec that needs to be disabled.
+ * @returns {void}
+ */
+TraceablePeerConnection.prototype.setVideoCodecs = function(preferredCodec = null, disabledCodec = null) {
+    // If both enable and disable are set, disable settings will prevail.
+    const enable = disabledCodec === null;
+    const mimeType = disabledCodec ? disabledCodec : preferredCodec;
+
+    if (this.codecPreference && (preferredCodec || disabledCodec)) {
+        this.codecPreference.enable = enable;
+        this.codecPreference.mimeType = mimeType;
+    } else if (preferredCodec || disabledCodec) {
+        this.codecPreference = {
+            enable,
+            mediaType: MediaType.VIDEO,
+            mimeType
+        };
+    } else {
+        logger.warn(`Invalid codec settings: preferred ${preferredCodec}, disabled ${disabledCodec},
+            atleast one value is needed`);
+    }
+
+    if (browser.supportsCodecPreferences()) {
+        // TODO implement codec preference using RTCRtpTransceiver.setCodecPreferences()
+        // We are using SDP munging for now until all browsers support this.
+    }
+};
+
+/**
  * Tells if the given WebRTC <tt>MediaStream</tt> has been added to
  * the underlying WebRTC PeerConnection.
  * @param {MediaStream} mediaStream
@@ -2086,6 +2104,7 @@ TraceablePeerConnection.prototype.setSenderVideoDegradationPreference = function
             parameters.encodings[encoding].degradationPreference = preference;
         }
     }
+    this.tpcUtils.updateEncodingsResolution(parameters);
 
     return videoSender.setParameters(parameters);
 };
@@ -2183,6 +2202,7 @@ TraceablePeerConnection.prototype.setMaxBitRate = function() {
         }
         parameters.encodings[0].maxBitrate = bitrate;
     }
+    this.tpcUtils.updateEncodingsResolution(parameters);
 
     return videoSender.setParameters(parameters);
 };
@@ -2323,10 +2343,15 @@ TraceablePeerConnection.prototype.setSenderVideoConstraint = function(frameHeigh
                 parameters.encodings[encoding].active = encodingsEnabledState[encoding];
             }
         }
+        this.tpcUtils.updateEncodingsResolution(parameters);
     } else if (newHeight > 0) {
-        parameters.encodings[0].scaleResolutionDownBy = localVideoTrack.resolution >= newHeight
-            ? Math.floor(localVideoTrack.resolution / newHeight)
-            : 1;
+        // Do not scale down the desktop tracks until QualityController is able to propagate the sender constraints
+        // only on the active media connection. Right now, the sender constraints received on the bridge channel
+        // are propagated on both the jvb and p2p connections in cases where they both are active at the same time.
+        parameters.encodings[0].scaleResolutionDownBy
+            = localVideoTrack.videoType === VideoType.DESKTOP || localVideoTrack.resolution <= newHeight
+                ? 1
+                : Math.floor(localVideoTrack.resolution / newHeight);
         parameters.encodings[0].active = true;
     } else {
         parameters.encodings[0].scaleResolutionDownBy = undefined;
