@@ -54,7 +54,7 @@ export class Context {
     /**
      * @param {string} id - local muc resourcepart
      */
-    constructor(id) {
+    constructor(id, videoFrameSignatureVerificationRatioInverse) {
         // An array (ring) of keys that we use for sending and receiving.
         this._cryptoKeyRing = new Array(KEYRING_SIZE);
 
@@ -70,6 +70,9 @@ export class Context {
 
         this._signatureKey = null;
         this._signatureOptions = null;
+        
+        this._videoFrameSignatureVerificationRatioInverse = videoFrameSignatureVerificationRatioInverse;
+        this._numFramesSinceLastVerification = 0;
     }
 
     /**
@@ -282,16 +285,24 @@ export class Context {
             // Verify the long-term signature of the authentication tag.
             if (signatureLength) {
                 if (this._signatureKey) {
-                    const signature = data.subarray(data.byteLength - signatureLength - 1, data.byteLength - 1);
-                    const validSignature = await crypto.subtle.verify(this._signatureOptions,
-                            this._signatureKey, signature, authTag);
+                    this._numFramesSinceLastVerification++;
+                    if (this._numFramesSinceLastVerification >= this._videoFrameSignatureVerificationRatioInverse) {
+                        this._numFramesSinceLastVerification = 0;
+                        const signature = data.subarray(data.byteLength - signatureLength - 1, data.byteLength - 1);
+                        const validSignature = await crypto.subtle.verify(this._signatureOptions,
+                                this._signatureKey, signature, authTag);
 
-                    if (!validSignature) {
-                        // TODO: surface this to the app. We are encrypted but validation failed.
-                        console.error('Long-term signature mismatch (or no signature key)');
+                        if (!validSignature) {
+                            // TODO: surface this to the app. We are encrypted but validation failed.
+                            console.error('Long-term signature mismatch (or no signature key)');
 
-                        return;
+                            return;
+                        }
+                        // console.log("1/verified");
                     }
+                    // else {
+                    //     console.log("2/skipped verification");
+                    // }
 
                     // TODO: surface this to the app. We are now encrypted and verified.
                 } else {

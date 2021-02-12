@@ -7,6 +7,7 @@ import { Context } from './Context';
 import { polyFillEncodedFrameMetadata } from './utils';
 
 const contexts = new Map(); // Map participant id => context
+let videoFrameSignatureVerificationRatioInverse = 1;
 
 onmessage = async event => {
     const { operation } = event.data;
@@ -15,7 +16,7 @@ onmessage = async event => {
         const { readableStream, writableStream, participantId } = event.data;
 
         if (!contexts.has(participantId)) {
-            contexts.set(participantId, new Context(participantId));
+            contexts.set(participantId, new Context(participantId, videoFrameSignatureVerificationRatioInverse));
         }
         const context = contexts.get(participantId);
         const transformStream = new TransformStream({
@@ -32,7 +33,7 @@ onmessage = async event => {
         const { readableStream, writableStream, participantId } = event.data;
 
         if (!contexts.has(participantId)) {
-            contexts.set(participantId, new Context(participantId));
+            contexts.set(participantId, new Context(participantId, videoFrameSignatureVerificationRatioInverse));
         }
         const context = contexts.get(participantId);
         const transformStream = new TransformStream({
@@ -49,7 +50,7 @@ onmessage = async event => {
         const { participantId, key, keyIndex } = event.data;
 
         if (!contexts.has(participantId)) {
-            contexts.set(participantId, new Context(participantId));
+            contexts.set(participantId, new Context(participantId, videoFrameSignatureVerificationRatioInverse));
         }
         const context = contexts.get(participantId);
 
@@ -62,7 +63,7 @@ onmessage = async event => {
         const { participantId, key, signatureOptions } = event.data;
 
         if (!contexts.has(participantId)) {
-            contexts.set(participantId, new Context(participantId));
+            contexts.set(participantId, new Context(participantId, videoFrameSignatureVerificationRatioInverse));
         }
         const context = contexts.get(participantId);
 
@@ -72,6 +73,13 @@ onmessage = async event => {
         const { participantId } = event.data;
 
         contexts.delete(participantId);
+    } else if (operation === 'setVideoFrameSignatureVerificationRatioInverse') {
+        videoFrameSignatureVerificationRatioInverse = event.data.videoFrameSignatureVerificationRatioInverse;
+        console.log("WORKER: setVideoFrameSignatureVerificationRatioInverse", videoFrameSignatureVerificationRatioInverse);
+        for (var entry of contexts.entries()) {
+            const context = entry[1];
+            context._videoFrameSignatureVerificationRatioInverse = videoFrameSignatureVerificationRatioInverse;
+        }
     } else {
         console.error('e2ee worker', operation);
     }

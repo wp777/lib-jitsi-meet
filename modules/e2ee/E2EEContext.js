@@ -152,4 +152,11 @@ export default class E2EEcontext {
             key
         });
     }
+    
+    setVideoFrameSignatureVerificationRatioInverse(videoFrameSignatureVerificationRatioInverse) {
+        this._worker.postMessage({
+            operation: 'setVideoFrameSignatureVerificationRatioInverse',
+            videoFrameSignatureVerificationRatioInverse,
+        });
+    }
 }
